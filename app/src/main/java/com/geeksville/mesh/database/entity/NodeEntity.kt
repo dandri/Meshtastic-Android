@@ -84,6 +84,7 @@ data class NodeEntity(
             return (if (brightness > 0.5) Color.BLACK else Color.WHITE) to Color.rgb(r, g, b)
         }
 
+    val isUnknownUser get() = user.hwModel == MeshProtos.HardwareModel.UNSET
     val hasPKC get() = !user.publicKey.isEmpty
     val errorByteString: ByteString get() = ByteString.copyFrom(ByteArray(32) { 0 })
     val mismatchKey get() = user.publicKey == errorByteString
@@ -107,9 +108,9 @@ data class NodeEntity(
     val validPosition: MeshProtos.Position? get() = position.takeIf { hasValidPosition() }
 
     // @return distance in meters to some other node (or null if unknown)
-    fun distance(o: NodeEntity): Int? {
-        return if (validPosition == null || o.validPosition == null) null
-        else latLongToMeter(latitude, longitude, o.latitude, o.longitude).toInt()
+    fun distance(o: NodeEntity): Int? = when {
+        validPosition == null || o.validPosition == null -> null
+        else -> latLongToMeter(latitude, longitude, o.latitude, o.longitude).toInt()
     }
 
     // @return a nice human readable string for the distance, or null for unknown
@@ -119,9 +120,9 @@ data class NodeEntity(
     }
 
     // @return bearing to the other position in degrees
-    fun bearing(o: NodeEntity?): Int? {
-        return if (validPosition == null || o?.validPosition == null) null
-        else bearing(latitude, longitude, o.latitude, o.longitude).toInt()
+    fun bearing(o: NodeEntity?): Int? = when {
+        validPosition == null || o?.validPosition == null -> null
+        else -> bearing(latitude, longitude, o.latitude, o.longitude).toInt()
     }
 
     fun gpsString(gpsFormat: Int): String = when (gpsFormat) {
@@ -140,7 +141,9 @@ data class NodeEntity(
             } else {
                 "%.1f°C".format(temperature)
             }
-        } else null
+        } else {
+            null
+        }
         val humidity = if (relativeHumidity != 0f) "%.0f%%".format(relativeHumidity) else null
         val pressure = if (barometricPressure != 0f) "%.1fhPa".format(barometricPressure) else null
         val gas = if (gasResistance != 0f) "%.0fMΩ".format(gasResistance) else null
@@ -188,7 +191,7 @@ data class NodeEntity(
         }
 
     companion object {
-        /// Convert to a double representation of degrees
+        // Convert to a double representation of degrees
         fun degD(i: Int) = i * 1e-7
         fun degI(d: Double) = (d * 1e7).toInt()
 

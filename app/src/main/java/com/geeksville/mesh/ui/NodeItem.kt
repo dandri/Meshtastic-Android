@@ -79,7 +79,7 @@ fun NodeItem(
     expanded: Boolean = false,
     currentTimeMillis: Long,
 ) {
-    val isUnknownUser = thatNode.user.hwModel == MeshProtos.HardwareModel.UNSET
+    val isUnknownUser = thatNode.isUnknownUser
     val unknownShortName = stringResource(id = R.string.unknown_node_short_name)
     val longName = thatNode.user.longName.ifEmpty { stringResource(id = R.string.unknown_username) }
 
@@ -90,9 +90,9 @@ fun NodeItem(
     }
     val (textColor, nodeColor) = thatNode.colors
 
-    val hwInfoString = thatNode.user.hwModel.let { hwModel ->
-        if (hwModel == MeshProtos.HardwareModel.UNSET) MeshProtos.HardwareModel.UNSET.name
-        else hwModel.name.replace('_', '-').replace('p', '.').lowercase()
+    val hwInfoString = when (val hwModel = thatNode.user.hwModel) {
+        MeshProtos.HardwareModel.UNSET -> MeshProtos.HardwareModel.UNSET.name
+        else -> hwModel.name.replace('_', '-').replace('p', '.').lowercase()
     }
     val roleName = if (isUnknownUser) {
         DeviceConfig.Role.UNRECOGNIZED.name

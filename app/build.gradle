@@ -32,8 +32,8 @@ android {
         applicationId "com.geeksville.mesh"
         minSdkVersion 21 // The oldest emulator image I have tried is 22 (though 21 probably works)
         targetSdk 34
-        versionCode 30501 // format is Mmmss (where M is 1+the numeric major number
-        versionName "2.5.1"
+        versionCode 30502 // format is Mmmss (where M is 1+the numeric major number
+        versionName "2.5.2"
         testInstrumentationRunner "com.geeksville.mesh.TestRunner"
 
         // per https://developer.android.com/studio/write/vector-asset-studio
@@ -228,7 +228,7 @@ dependencies {
     googleImplementation 'com.suddenh4x.ratingdialog:awesome-app-rating:2.7.0'
 
     // Coroutines
-    def coroutines_version = '1.8.1'
+    def coroutines_version = '1.9.0'
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:$coroutines_version"
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-guava:$coroutines_version"
 
@@ -239,7 +239,7 @@ dependencies {
     implementation 'com.github.mik3y:usb-serial-for-android:3.8.0'
 
     // For Firebase Crashlytics & Analytics
-    googleImplementation platform('com.google.firebase:firebase-bom:33.2.0')
+    googleImplementation platform('com.google.firebase:firebase-bom:33.4.0')
     googleImplementation 'com.google.firebase:firebase-crashlytics'
     googleImplementation 'com.google.firebase:firebase-analytics'
 

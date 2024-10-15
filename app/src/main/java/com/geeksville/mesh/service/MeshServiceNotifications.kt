@@ -17,14 +17,24 @@ import androidx.core.app.NotificationCompat
 import androidx.core.graphics.drawable.toBitmapOrNull
 import com.geeksville.mesh.MainActivity
 import com.geeksville.mesh.R
+import com.geeksville.mesh.TelemetryProtos.LocalStats
 import com.geeksville.mesh.android.notificationManager
+import com.geeksville.mesh.database.entity.NodeEntity
 import com.geeksville.mesh.util.PendingIntentCompat
 import java.io.Closeable
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
-
+@Suppress("TooManyFunctions")
 class MeshServiceNotifications(
     private val context: Context
 ) : Closeable {
+
+    companion object {
+        private const val FIFTEEN_MINUTES_IN_MILLIS = 15L * 60 * 1000
+    }
+
     private val notificationManager: NotificationManager get() = context.notificationManager
 
     // We have two notification channels: one for general service status and another one for messages
@@ -73,6 +83,30 @@ class MeshServiceNotifications(
         return channelId
     }
 
+    @RequiresApi(Build.VERSION_CODES.O)
+    private fun createNewNodeNotificationChannel(): String {
+        val channelId = "new_nodes"
+        val channelName = context.getString(R.string.meshtastic_new_nodes_notifications)
+        val channel = NotificationChannel(
+            channelId,
+            channelName,
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            lightColor = Color.BLUE
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            setShowBadge(true)
+            setSound(
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+            )
+        }
+        notificationManager.createNotificationChannel(channel)
+        return channelId
+    }
+
     private val channelId: String by lazy {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             createNotificationChannel()
@@ -93,17 +127,58 @@ class MeshServiceNotifications(
         }
     }
 
-    fun updateServiceStateNotification(summaryString: String) =
+    private val newNodeChannelId: String by lazy {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            createNewNodeNotificationChannel()
+        } else {
+            ""
+        }
+    }
+
+    private fun formatStatsString(stats: LocalStats?, currentStatsUpdatedAtMillis: Long?): String {
+        val updatedAt = "Next update at: ${
+            currentStatsUpdatedAtMillis?.let {
+                val date = Date(it + FIFTEEN_MINUTES_IN_MILLIS) // Add 15 minutes in milliseconds
+                val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                dateFormat.format(date)
+            } ?: "???"
+        }"
+        val statsJoined = stats?.allFields?.mapNotNull { (k, v) ->
+            if (k.name == "num_online_nodes" || k.name == "num_total_nodes") {
+                return@mapNotNull null
+            }
+            "${
+                k.name.replace('_', ' ').split(" ")
+                    .joinToString(" ") { it.replaceFirstChar { char -> char.uppercase() } }
+            }=$v"
+        }?.joinToString("\n") ?: "No Local Stats"
+        return "$updatedAt\n$statsJoined"
+    }
+
+    fun updateServiceStateNotification(
+        summaryString: String? = null,
+        localStats: LocalStats? = null,
+        currentStatsUpdatedAtMillis: Long? = null,
+    ) {
+        val statsString = formatStatsString(localStats, currentStatsUpdatedAtMillis)
         notificationManager.notify(
             notifyId,
-            createServiceStateNotification(summaryString)
+            createServiceStateNotification(summaryString.orEmpty(), statsString)
         )
+    }
 
     fun updateMessageNotification(name: String, message: String) =
         notificationManager.notify(
             messageNotifyId,
             createMessageNotification(name, message)
         )
+
+    fun showNewNodeSeenNotification(node: NodeEntity) {
+        notificationManager.notify(
+            node.num, // show unique notifications
+            createNewNodeSeenNotification(node.user.shortName, node.user.longName)
+        )
+    }
 
     private val openAppIntent: PendingIntent by lazy {
         PendingIntent.getActivity(
@@ -139,28 +214,44 @@ class MeshServiceNotifications(
 
             builder.setSmallIcon(
                 // vector form icons don't work reliably on older androids
-                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) R.drawable.app_icon_novect
-                else R.drawable.app_icon
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+                    R.drawable.app_icon_novect
+                } else {
+                    R.drawable.app_icon
+                }
             )
                 .setLargeIcon(largeIcon)
         }
         return builder
     }
 
-    fun createServiceStateNotification(summaryString: String): Notification {
-        val builder = commonBuilder(channelId)
-        with(builder) {
+    lateinit var serviceNotificationBuilder: NotificationCompat.Builder
+    fun createServiceStateNotification(name: String, message: String? = null): Notification {
+        if (!::serviceNotificationBuilder.isInitialized) {
+            serviceNotificationBuilder = commonBuilder(channelId)
+        }
+        with(serviceNotificationBuilder) {
             priority = NotificationCompat.PRIORITY_MIN
             setCategory(Notification.CATEGORY_SERVICE)
             setOngoing(true)
-            setContentTitle(summaryString) // leave this off for now so our notification looks smaller
+            setContentTitle(name)
+            message?.let {
+                setContentText(it)
+                setStyle(
+                    NotificationCompat.BigTextStyle()
+                        .bigText(message),
+                )
+            }
         }
-        return builder.build()
+        return serviceNotificationBuilder.build()
     }
 
+    lateinit var messageNotificationBuilder: NotificationCompat.Builder
     private fun createMessageNotification(name: String, message: String): Notification {
-        val builder = commonBuilder(messageChannelId)
-        with(builder) {
+        if (!::messageNotificationBuilder.isInitialized) {
+            messageNotificationBuilder = commonBuilder(messageChannelId)
+        }
+        with(messageNotificationBuilder) {
             priority = NotificationCompat.PRIORITY_DEFAULT
             setCategory(Notification.CATEGORY_MESSAGE)
             setAutoCancel(true)
@@ -171,7 +262,28 @@ class MeshServiceNotifications(
                     .bigText(message),
             )
         }
-        return builder.build()
+        return messageNotificationBuilder.build()
+    }
+
+    lateinit var newNodeSeenNotificationBuilder: NotificationCompat.Builder
+    private fun createNewNodeSeenNotification(name: String, message: String? = null): Notification {
+        if (!::newNodeSeenNotificationBuilder.isInitialized) {
+            newNodeSeenNotificationBuilder = commonBuilder(newNodeChannelId)
+        }
+        with(newNodeSeenNotificationBuilder) {
+            priority = NotificationCompat.PRIORITY_DEFAULT
+            setCategory(Notification.CATEGORY_STATUS)
+            setAutoCancel(true)
+            setContentTitle("New Node Seen: $name")
+            message?.let {
+                setContentText(it)
+                setStyle(
+                    NotificationCompat.BigTextStyle()
+                        .bigText(message),
+                )
+            }
+        }
+        return newNodeSeenNotificationBuilder.build()
     }
 
     override fun close() {
