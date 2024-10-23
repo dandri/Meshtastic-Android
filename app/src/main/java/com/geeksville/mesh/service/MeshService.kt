@@ -28,6 +28,7 @@ import com.geeksville.mesh.database.entity.NodeEntity
 import com.geeksville.mesh.database.entity.Packet
 import com.geeksville.mesh.database.entity.toNodeInfo
 import com.geeksville.mesh.model.DeviceVersion
+import com.geeksville.mesh.model.getTracerouteResponse
 import com.geeksville.mesh.repository.datastore.RadioConfigRepository
 import com.geeksville.mesh.repository.location.LocationRepository
 import com.geeksville.mesh.repository.network.MQTTRepository
@@ -576,13 +577,10 @@ class MeshService : Service(), Logging {
         } else {
             val data = packet.decoded
 
-            // If the rxTime was not set by the device (because device software was old), guess at a time
-            val rxTime = if (packet.rxTime != 0) packet.rxTime else currentSecond()
-
             DataPacket(
                 from = toNodeID(packet.from),
                 to = toNodeID(packet.to),
-                time = rxTime * 1000L,
+                time = packet.rxTime * 1000L,
                 id = packet.id,
                 dataType = data.portnumValue,
                 bytes = data.payload.toByteArray(),
@@ -747,9 +745,9 @@ class MeshService : Service(), Logging {
                     }
 
                     Portnums.PortNum.TRACEROUTE_APP_VALUE -> {
-                        if (data.wantResponse) return // ignore data from traceroute requests
-                        val parsed = MeshProtos.RouteDiscovery.parseFrom(data.payload)
-                        handleReceivedTraceroute(packet, parsed)
+                        radioConfigRepository.setTracerouteResponse(
+                            packet.getTracerouteResponse(::getUserName)
+                        )
                     }
 
                     else -> debug("No custom processing needed for ${data.portnumValue}")
@@ -906,58 +904,16 @@ class MeshService : Service(), Logging {
         }
     }
 
-    @Suppress("MagicNumber")
-    private fun formatTraceroutePath(nodesList: List<Int>, snrList: List<Int>): String {
-        // nodesList should include both origin and destination nodes
-        // origin will not have an SNR value, but destination should
-        val snrStr = if (snrList.size == nodesList.size - 1) {
-            snrList
-        } else {
-            // use unknown SNR for entire route if snrList has invalid size
-            List(nodesList.size - 1) { -128 }
-        }.map { snr ->
-            val str = if (snr == -128) "?" else "${snr / 4}"
-            "⇊ $str dB"
-        }
-
-        return nodesList.map { nodeId ->
-            "■ ${getUserName(nodeId)}"
-        }.flatMapIndexed { i, nodeStr ->
-            if (i == 0) listOf(nodeStr) else listOf(snrStr[i - 1], nodeStr)
-        }.joinToString("\n")
-    }
-
-    private fun handleReceivedTraceroute(packet: MeshPacket, trace: MeshProtos.RouteDiscovery) {
-        val nodesToward = mutableListOf<Int>()
-        nodesToward.add(packet.to)
-        nodesToward += trace.routeList
-        nodesToward.add(packet.from)
-
-        val nodesBack = mutableListOf<Int>()
-        if (packet.hopStart > 0 && trace.snrBackList.size > 0) { // otherwise back route is invalid
-            nodesBack.add(packet.from)
-            nodesBack += trace.routeBackList
-            nodesBack.add(packet.to)
-        }
-
-        radioConfigRepository.setTracerouteResponse(buildString {
-            append("Route traced toward destination:\n\n")
-            append(formatTraceroutePath(nodesToward, trace.snrTowardsList))
-            if (nodesBack.size > 0) {
-                append("\n\n")
-                append("Route traced back to us:\n\n")
-                append(formatTraceroutePath(nodesBack, trace.snrBackList))
-            }
-        })
-    }
-
     // If apps try to send packets when our radio is sleeping, we queue them here instead
     private val offlineSentPackets = mutableListOf<DataPacket>()
 
     // Update our model and resend as needed for a MeshPacket we just received from the radio
     private fun handleReceivedMeshPacket(packet: MeshPacket) {
         if (haveNodeDB) {
-            processReceivedMeshPacket(packet)
+            processReceivedMeshPacket(packet.toBuilder().apply {
+                // If the rxTime is invalid (earlier than build time), update with current time
+                if (packet.rxTime < BuildConfig.TIMESTAMP) setRxTime(currentSecond())
+            }.build())
             onNodeDBChanged()
         } else {
             warn("Ignoring early received packet: ${packet.toOneLineString()}")
@@ -1089,7 +1045,7 @@ class MeshService : Service(), Logging {
         // decided to pass through to us (except for broadcast packets)
         // val toNum = packet.to
 
-        // debug("Recieved: $packet")
+        // debug("Received: $packet")
         if (packet.hasDecoded()) {
             val packetToSave = MeshLog(
                 uuid = UUID.randomUUID().toString(),
@@ -1117,11 +1073,8 @@ class MeshService : Service(), Logging {
             // Do not generate redundant broadcasts of node change for this bookkeeping updateNodeInfo call
             // because apps really only care about important updates of node state - which handledReceivedData will give them
             updateNodeInfo(fromNum, withBroadcast = false) {
-                // If the rxTime was not set by the device (because device software was old), guess at a time
-                val rxTime = if (packet.rxTime != 0) packet.rxTime else currentSecond()
-
                 // Update our last seen based on any valid timestamps.  If the device didn't provide a timestamp make one
-                it.lastHeard = rxTime
+                it.lastHeard = packet.rxTime
                 it.snr = packet.rxSnr
                 it.rssi = packet.rxRssi
 
